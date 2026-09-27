@@ -1,6 +1,25 @@
 import { createInterface } from "node:readline/promises";
 import { getOpenAIToolDefinitions, runTool } from "./tools";
 import { SYSTEM_PROMPT } from "./agentSystemPrompt";
+import { youLabel, promptGlyph, assistantLabel, dim, renderAssistantMessage } from "./utils/cliRender";
+import { ToolProgress } from "./utils/toolProgress";
+
+// Harness-only pseudo-tool: NOT part of the skill's own tool registry (a real
+// Skill invocation doesn't need one -- the surrounding chat UI owns ending the
+// conversation). This interactive CLI REPL does need an explicit signal, and
+// routing it through the model instead of matching a fixed keyword list means
+// any phrasing, in any language, works ("exit", "вийти", "that's all, thanks").
+const END_SESSION_TOOL = {
+  type: "function" as const,
+  function: {
+    name: "end_session",
+    description:
+      "Call this if, and only if, the user's message indicates they want to end this conversation/session " +
+      "-- in any language or phrasing (e.g. \"exit\", \"quit\", \"stop\", \"bye\", \"вийти\", \"that's all, thanks\", " +
+      "\"I'm done\"). Do not call any other tool in the same turn as this one.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+};
 
 /**
  * Interactive end-to-end agent test harness using OpenRouter.
@@ -16,9 +35,10 @@ import { SYSTEM_PROMPT } from "./agentSystemPrompt";
  * The agentic tool-calling loop (runAgentTurn) stops as soon as the model
  * produces a plain-text answer with no further tool calls -- it does NOT keep
  * calling itself. Control then returns to a human at a prompt, who can ask a
- * follow-up about the same report, start a new comparison, or type "exit" to
- * quit. This mirrors how the skill is actually used (one request -> one
- * report -> the user reacts), rather than an unattended loop.
+ * follow-up about the same report, start a new comparison, or indicate (in
+ * whatever language or phrasing) that they're done. This mirrors how the
+ * skill is actually used (one request -> one report -> the user reacts),
+ * rather than an unattended loop.
  *
  * Uses OpenRouter's OpenAI-compatible /chat/completions endpoint. Defaults to
  * free model variants (https://openrouter.ai/docs/guides/routing/model-variants/free)
@@ -66,6 +86,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Re-prompts on a blank Enter instead of sending an empty message. */
+async function nextUserInput(rl: ReturnType<typeof createInterface>): Promise<string> {
+  while (true) {
+    const input = (await rl.question(promptGlyph)).trim();
+    if (input) return input;
+  }
+}
+
 async function callOpenRouter(messages: OpenAIMessage[], model: string, apiKey: string) {
   const response = await fetch(OPENROUTER_URL, {
     method: "POST",
@@ -79,7 +107,7 @@ async function callOpenRouter(messages: OpenAIMessage[], model: string, apiKey: 
     body: JSON.stringify({
       model,
       messages,
-      tools: getOpenAIToolDefinitions(),
+      tools: [...getOpenAIToolDefinitions(), END_SESSION_TOOL],
     }),
   });
 
@@ -143,26 +171,42 @@ async function callOpenRouterWithFallback(
  * `candidates` is mutated in place: once a model succeeds, the list collapses
  * to just that one, so later turns in the same session don't re-probe the
  * whole fallback list every time.
+ *
+ * `exit` in the return value is true if the model called end_session, meaning
+ * the CLI session should stop after showing this answer.
  */
-async function runAgentTurn(messages: OpenAIMessage[], candidates: string[], apiKey: string): Promise<string> {
+async function runAgentTurn(
+  messages: OpenAIMessage[],
+  candidates: string[],
+  apiKey: string
+): Promise<{ text: string; exit: boolean }> {
   let modelLogged = candidates.length === 1;
+  const progress = new ToolProgress();
+  let exit = false;
 
   for (let step = 1; step <= MAX_TURNS; step++) {
     const { message: assistantMessage, modelUsed } = await callOpenRouterWithFallback(messages, candidates, apiKey);
     candidates.length = 0;
     candidates.push(modelUsed);
     if (!modelLogged) {
-      console.log(`Model: ${modelUsed}\n`);
+      console.log(dim(`Model: ${modelUsed}\n`));
       modelLogged = true;
     }
     messages.push(assistantMessage);
 
     const toolCalls = assistantMessage.tool_calls ?? [];
     if (toolCalls.length === 0) {
-      return assistantMessage.content ?? "(empty response)";
+      progress.flush();
+      return { text: assistantMessage.content ?? "(empty response)", exit };
     }
 
     for (const call of toolCalls) {
+      if (call.function.name === "end_session") {
+        exit = true;
+        messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ ok: true }) });
+        continue;
+      }
+
       let args: unknown;
       try {
         args = JSON.parse(call.function.arguments);
@@ -170,21 +214,24 @@ async function runAgentTurn(messages: OpenAIMessage[], candidates: string[], api
         args = {};
       }
 
-      console.log(`  [tool call] ${call.function.name}(${JSON.stringify(args)})`);
+      progress.start(call.function.name, args);
 
       let resultText: string;
+      let parsedResult: unknown;
       try {
-        const result = await runTool(call.function.name, args);
-        resultText = JSON.stringify(result);
+        parsedResult = await runTool(call.function.name, args);
+        resultText = JSON.stringify(parsedResult);
       } catch (error) {
-        resultText = JSON.stringify({ error: error instanceof Error ? error.message : String(error) });
+        parsedResult = { error: error instanceof Error ? error.message : String(error) };
+        resultText = JSON.stringify(parsedResult);
       }
-      console.log(`  [tool result] ${resultText}`);
+      progress.finish(call.function.name, parsedResult);
 
       messages.push({ role: "tool", tool_call_id: call.id, content: resultText });
     }
   }
 
+  progress.flush();
   throw new Error(`Stopped after ${MAX_TURNS} tool-call steps without a final answer -- the model may be stuck in a loop.`);
 }
 
@@ -206,30 +253,36 @@ async function main() {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
+  // Only the very first prompt needs to be echoed -- it comes from argv/the
+  // default, so it was never actually typed into this terminal. Every prompt
+  // after that comes back from rl.question(), which readline already echoed
+  // as the user typed it; logging it again would just double it up.
   let nextPrompt =
     process.argv.slice(2).join(" ") ||
     'Compare interest in "Intermittent fasting" between Ukrainian, Polish, and German Wikipedia over the last 24 months, then generate a report.';
 
-  console.log("Type 'exit' or 'quit' at any prompt to stop.\n");
+  console.log(dim("Say you're done (in any language) to end the session.\n"));
+  console.log(`${youLabel} ${nextPrompt}\n`);
 
   try {
     while (true) {
-      console.log(`You: ${nextPrompt}\n`);
       messages.push({ role: "user", content: nextPrompt });
 
+      let exit = false;
       try {
-        const answer = await runAgentTurn(messages, candidates, apiKey);
-        console.log(`\nAssistant: ${answer}\n`);
+        const result = await runAgentTurn(messages, candidates, apiKey);
+        console.log(`\n${assistantLabel}\n${renderAssistantMessage(result.text)}\n`);
+        exit = result.exit;
       } catch (error) {
-        console.error(`\nError: ${error instanceof Error ? error.message : String(error)}\n`);
+        console.error(`\n${dim("Error:")} ${error instanceof Error ? error.message : String(error)}\n`);
       }
 
-      const input = (await rl.question("You (or 'exit'): ")).trim();
-      if (!input || /^(exit|quit)$/i.test(input)) break;
-      nextPrompt = input;
+      if (exit) break;
+      nextPrompt = await nextUserInput(rl);
     }
   } finally {
     rl.close();
+    console.log(); // guarantee a trailing newline so the shell doesn't render a "%" glued to our last output
   }
 }
 
