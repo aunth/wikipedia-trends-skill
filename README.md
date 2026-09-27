@@ -7,9 +7,14 @@ for the LLM-facing usage manual (workflow, error handling, scaling notes).
 ## Setup
 
 ```bash
-npm install
+npm install --legacy-peer-deps
 npm run build
 ```
+
+`--legacy-peer-deps` is needed because `@anthropic-ai/sdk` declares an
+*optional* peer on `zod ^3.25.0 || ^4.0.0` (for a schema-helper feature this
+project doesn't use), which otherwise conflicts with the `zod@3.23.8` pin
+below. Plain `npm install` will fail with an ERESOLVE error without it.
 
 ### macOS: `canvas` native dependency
 
@@ -46,7 +51,38 @@ This runs `resolve_topic_languages` -> `analyze_wikipedia_trends` ->
 `generate_research_report` in sequence, exactly as an LLM tool loop would, and
 writes a PDF to `output/`.
 
-## Wiring into an actual LLM agent loop
+## Interactive agent test harnesses
+
+Two ready-to-run harnesses wire the tool registry up to a real LLM in an
+interactive loop: each answers your prompt (running the tool-calling loop
+until the model produces a plain-text answer with no more tool calls, then
+stopping -- it never keeps going on its own), then drops you into a
+`You (or 'exit'):` prompt for follow-ups. Conversation history is preserved
+across follow-ups, so you can ask about the report you just got or start a
+new comparison.
+
+### Claude (the primary target model)
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... npm run test:agent -- "Compare interest in Electric bikes between German, French, and Japanese Wikipedia"
+```
+
+Defaults to `claude-haiku-4-5-20251001`; override with `ANTHROPIC_MODEL`.
+
+### OpenRouter (free-tier sanity check against other/smaller models)
+
+```bash
+OPENROUTER_API_KEY=sk-or-... npm run test:openrouter -- "Compare interest in Electric bikes between German, French, and Japanese Wikipedia"
+```
+
+Defaults to `openrouter/free` (OpenRouter's auto-router across whatever free
+models are currently healthy) with a few named free fallbacks if that's
+unavailable. Override with `OPENROUTER_MODEL` to pin an exact model (free or
+paid, e.g. `anthropic/claude-haiku-4.5`) -- an explicit override skips the
+fallback list entirely. Free models are smaller and less reliable at tool use
+than Claude; that's a model-capability difference, not a bug in this project.
+
+## Wiring into your own LLM agent loop
 
 ```ts
 import { getAnthropicToolDefinitions, runTool } from "./src/tools";
@@ -55,6 +91,9 @@ import { getAnthropicToolDefinitions, runTool } from "./src/tools";
 // Messages API call. When the model returns a tool_use block, dispatch it:
 const result = await runTool(toolUseBlock.name, toolUseBlock.input);
 ```
+
+For an OpenAI-compatible API (OpenRouter, etc.), use `getOpenAIToolDefinitions()`
+instead -- see `src/testOpenRouterAgent.ts` for a full working loop.
 
 ## Project layout
 

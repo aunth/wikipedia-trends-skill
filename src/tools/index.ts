@@ -24,3 +24,16 @@ export async function runTool(name: string, input: unknown): Promise<unknown> {
 export function getAnthropicToolDefinitions() {
   return TOOLS.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 }
+
+/**
+ * OpenAI-compatible `tools` array shape: { type: "function", function: {...} }.
+ * Same underlying JSON Schema as the Anthropic form, just nested differently --
+ * this is what OpenRouter (and any OpenAI-compatible chat completions API)
+ * expects.
+ */
+export function getOpenAIToolDefinitions() {
+  return TOOLS.map(({ name, description, input_schema }) => ({
+    type: "function" as const,
+    function: { name, description, parameters: input_schema },
+  }));
+}
