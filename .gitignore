@@ -1,0 +1,10 @@
+node_modules/
+dist/
+output/*.pdf
+data/cache/*.json
+data/datasets/*.json
+!output/.gitkeep
+!data/cache/.gitkeep
+!data/datasets/.gitkeep
+*.log
+.DS_Store
