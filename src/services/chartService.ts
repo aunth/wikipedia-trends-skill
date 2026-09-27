@@ -3,6 +3,7 @@ import { ChartJSNodeCanvas } from "chartjs-node-canvas";
 import { ChartConfiguration } from "chart.js";
 import { config } from "../config";
 import { StoredDataset } from "../types";
+import { reportStringsFor } from "./reportStrings";
 
 const CHART_FONT_FAMILY = "DejaVu Sans";
 
@@ -80,7 +81,11 @@ export interface RenderChartResult {
   seriesOmitted: string[];
 }
 
-export async function renderComparisonChart(dataset: StoredDataset): Promise<RenderChartResult> {
+export async function renderComparisonChart(
+  dataset: StoredDataset,
+  reportLanguage?: string
+): Promise<RenderChartResult> {
+  const strings = reportStringsFor(reportLanguage);
   const foundArticles = dataset.articles.filter((a) => a.series.length > 0);
 
   // If there are more series than the validated palette supports, keep the
@@ -132,7 +137,7 @@ export async function renderComparisonChart(dataset: StoredDataset): Promise<Ren
         },
         title: {
           display: true,
-          text: "Weekly-average Wikipedia pageviews by language",
+          text: strings.chartTitle,
           color: INK_PRIMARY,
           font: { size: 14, weight: "bold", family: CHART_FONT_FAMILY },
         },

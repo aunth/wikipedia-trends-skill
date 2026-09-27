@@ -9,7 +9,7 @@ export const analyzeWikipediaTrendsTool = {
     "metrics only (total views, monthly average, trend %, spike/anomaly flags) plus a dataset_id -- " +
     "never raw daily numbers. Use the exact titles from resolve_topic_languages. Pass the returned " +
     "dataset_id to generate_research_report; do not attempt to recompute or restate the raw series yourself.",
-  input_schema: zodToJsonSchema(AnalyzeWikipediaTrendsInputSchema, "AnalyzeWikipediaTrendsInput"),
+  input_schema: zodToJsonSchema(AnalyzeWikipediaTrendsInputSchema),
   execute: async (rawInput: unknown) => {
     const parsed = AnalyzeWikipediaTrendsInputSchema.parse(rawInput);
     const input = {

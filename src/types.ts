@@ -147,6 +147,23 @@ export const GenerateResearchReportInputSchema = z.object({
       "The agent's written insights and caveats about the trends, in plain prose. Will be truncated if it doesn't fit one page."
     ),
   title: z.string().max(120).optional().describe("Optional report title. Defaults to a generic market-research title."),
+  save_to: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Where to save the PDF, if the user asked for a specific location or filename (e.g. \"save it to my " +
+        "Desktop\", \"call it wwii-report.pdf\"). Accepts a directory (e.g. '~/Desktop') -- the file keeps its " +
+        "default generated name -- or a full path ending in '.pdf' for a specific filename. '~' expands to the " +
+        "user's home directory. Omit entirely if the user didn't ask for a particular location; it then saves " +
+        "into this project's own output/ directory, whose path is returned in file_path either way."
+    ),
+  report_language: LanguageCodeSchema.optional().describe(
+    "Language for the report's fixed labels (table headers, chart title, footer disclaimer) -- e.g. 'uk' if the " +
+      "user has been writing in Ukrainian. Defaults to 'en'. Only 'en' and 'uk' are fully translated today; any " +
+      "other code falls back to English labels (your `llm_analysis_text` and `title` are unaffected -- write " +
+      "those in whatever language fits the conversation regardless of this field)."
+  ),
 });
 export type GenerateResearchReportInput = z.infer<typeof GenerateResearchReportInputSchema>;
 

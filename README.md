@@ -82,7 +82,27 @@ paid, e.g. `anthropic/claude-haiku-4.5`) -- an explicit override skips the
 fallback list entirely. Free models are smaller and less reliable at tool use
 than Claude; that's a model-capability difference, not a bug in this project.
 
-## Wiring into your own LLM agent loop
+## How an agent uses this skill
+
+The primary integration path -- the one `SKILL.md` documents -- is the CLI in
+`dist/cli.js`. Any agent with a plain shell/code-execution tool (Claude Code,
+claude.ai, the Claude Agent SDK's skill runner, etc.) invokes each tool as a
+one-shot command and reads a line of JSON back, with no pre-registration step
+required from the host:
+
+```bash
+node dist/cli.js resolve_topic_languages '{"topic":"Intermittent fasting","source_language":"en","target_languages":["uk","pl"]}'
+```
+
+This is what makes the skill self-contained: `SKILL.md` + this directory is
+everything an agent needs, without a host having to wire up custom
+function-calling schemas first.
+
+### Alternative: native tool-calling integration
+
+If you're embedding this logic into your own agent loop that already does
+Anthropic/OpenAI-style function calling, you can skip the CLI and register
+the tools directly instead:
 
 ```ts
 import { getAnthropicToolDefinitions, runTool } from "./src/tools";
@@ -93,7 +113,11 @@ const result = await runTool(toolUseBlock.name, toolUseBlock.input);
 ```
 
 For an OpenAI-compatible API (OpenRouter, etc.), use `getOpenAIToolDefinitions()`
-instead -- see `src/testOpenRouterAgent.ts` for a full working loop.
+instead. `src/testAnthropicAgent.ts` and `src/testOpenRouterAgent.ts` are full
+working loops built this way -- they're how this project was validated
+end-to-end against Claude Haiku 4.5 and free OpenRouter models during
+development, and remain useful as a reference integration or for hosts that
+prefer native tool-calling over shelling out to the CLI.
 
 ## Project layout
 

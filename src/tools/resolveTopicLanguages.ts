@@ -9,7 +9,7 @@ export const resolveTopicLanguagesTool = {
     "requested target language via Wikidata. Always call this FIRST, before analyze_wikipedia_trends -- " +
     "article titles differ per language and cannot be guessed or translated. If a language is missing " +
     "from the result, tell the user and proceed with the languages that were found.",
-  input_schema: zodToJsonSchema(ResolveTopicLanguagesInputSchema, "ResolveTopicLanguagesInput"),
+  input_schema: zodToJsonSchema(ResolveTopicLanguagesInputSchema),
   execute: async (rawInput: unknown) => {
     const parsed = ResolveTopicLanguagesInputSchema.parse(rawInput);
     const input = {

@@ -1,8 +1,10 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import PDFDocument from "pdfkit";
 import { config } from "../config";
 import { StoredDataset } from "../types";
+import { reportStringsFor, ReportStrings } from "./reportStrings";
 
 /**
  * PDF Report Generation.
@@ -42,23 +44,45 @@ export interface GeneratePdfInput {
   chartBuffer: Buffer;
   analysisText: string;
   title?: string;
+  reportLanguage?: string;
+  saveTo?: string;
+}
+
+/**
+ * Resolves the user-facing `save_to` hint (a bare directory, or a full path
+ * ending in .pdf) against a default location, expanding a leading `~` to the
+ * home directory -- the LLM knows "Desktop" or "~/Desktop", not this
+ * machine's concrete home path, so that expansion has to happen in code.
+ */
+function resolveSaveTarget(saveTo: string | undefined, defaultDir: string, defaultFileName: string): string {
+  if (!saveTo) return path.join(defaultDir, defaultFileName);
+
+  const expanded = saveTo === "~" || saveTo.startsWith("~/") ? path.join(os.homedir(), saveTo.slice(1)) : saveTo;
+  return expanded.toLowerCase().endsWith(".pdf") ? expanded : path.join(expanded, defaultFileName);
 }
 
 function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-function drawHeader(doc: PDFKit.PDFDocument, title: string, dataset: StoredDataset): number {
-  doc.fillColor(INK_PRIMARY).font(FONT_BOLD).fontSize(20).text(title, PAGE_MARGIN, PAGE_MARGIN);
+function drawHeader(doc: PDFKit.PDFDocument, title: string, dataset: StoredDataset, strings: ReportStrings): number {
+  const titleFontSize = 20;
+  doc.fillColor(INK_PRIMARY).font(FONT_BOLD).fontSize(titleFontSize);
+  // Measure first: a long/localized title can wrap to 2 lines, and the
+  // subtitle must start below however tall that turns out to be, or it
+  // overlaps the title's second line.
+  const titleHeight = doc.heightOfString(title, { width: CONTENT_WIDTH });
+  doc.text(title, PAGE_MARGIN, PAGE_MARGIN, { width: CONTENT_WIDTH });
 
-  const subtitle = `Wikipedia interest comparison · ${dataset.periodStart} to ${dataset.periodEnd} · Generated ${new Date().toISOString().slice(0, 10)}`;
+  const subtitleY = PAGE_MARGIN + titleHeight + 6;
+  const subtitle = `${strings.subtitleLabel} · ${dataset.periodStart} to ${dataset.periodEnd} · ${strings.generatedLabel} ${new Date().toISOString().slice(0, 10)}`;
   doc
     .fillColor(INK_SECONDARY)
     .font(FONT_REGULAR)
     .fontSize(9)
-    .text(subtitle, PAGE_MARGIN, PAGE_MARGIN + 26);
+    .text(subtitle, PAGE_MARGIN, subtitleY, { width: CONTENT_WIDTH });
 
-  return PAGE_MARGIN + 26 + 16;
+  return subtitleY + 14 + 16;
 }
 
 function drawChart(doc: PDFKit.PDFDocument, chartBuffer: Buffer, y: number): number {
@@ -70,14 +94,14 @@ function drawChart(doc: PDFKit.PDFDocument, chartBuffer: Buffer, y: number): num
   return y + height + 16;
 }
 
-function drawMetricsTable(doc: PDFKit.PDFDocument, dataset: StoredDataset, y: number): number {
+function drawMetricsTable(doc: PDFKit.PDFDocument, dataset: StoredDataset, y: number, strings: ReportStrings): number {
   const columns = [
-    { key: "lang", label: "Lang", width: 40 },
-    { key: "title", label: "Article", width: 150 },
-    { key: "total_views", label: "Total Views", width: 85 },
-    { key: "monthly_average_views", label: "Monthly Avg", width: 85 },
-    { key: "trend_percentage", label: "Trend", width: 70 },
-    { key: "anomalies", label: "Spikes", width: 85 },
+    { key: "lang", label: strings.table.lang, width: 40 },
+    { key: "title", label: strings.table.article, width: 150 },
+    { key: "total_views", label: strings.table.totalViews, width: 85 },
+    { key: "monthly_average_views", label: strings.table.monthlyAvg, width: 85 },
+    { key: "trend_percentage", label: strings.table.trend, width: 70 },
+    { key: "anomalies", label: strings.table.spikes, width: 85 },
   ] as const;
 
   let x = PAGE_MARGIN;
@@ -97,11 +121,15 @@ function drawMetricsTable(doc: PDFKit.PDFDocument, dataset: StoredDataset, y: nu
     const trendSign = metric.trend_percentage > 0 ? "+" : "";
     const rowValues: Record<(typeof columns)[number]["key"], string> = {
       lang: metric.lang.toUpperCase(),
-      title: metric.found ? metric.title : `${metric.title} (no data)`,
+      title: metric.found ? metric.title : `${metric.title} (${strings.table.noData})`,
       total_views: metric.found ? formatNumber(metric.total_views) : "-",
       monthly_average_views: metric.found ? formatNumber(metric.monthly_average_views) : "-",
       trend_percentage: metric.found ? `${trendSign}${metric.trend_percentage}%` : "-",
-      anomalies: metric.found ? (metric.has_anomalies ? `${metric.anomaly_dates.length} detected` : "None") : "-",
+      anomalies: metric.found
+        ? metric.has_anomalies
+          ? `${metric.anomaly_dates.length} ${strings.table.detectedSuffix}`
+          : strings.table.none
+        : "-",
     };
 
     doc.fillColor(metric.found ? INK_PRIMARY : INK_MUTED);
@@ -115,8 +143,14 @@ function drawMetricsTable(doc: PDFKit.PDFDocument, dataset: StoredDataset, y: nu
   return y + 10;
 }
 
-function drawAnalysis(doc: PDFKit.PDFDocument, analysisText: string, y: number, maxY: number): number {
-  doc.font(FONT_BOLD).fontSize(11).fillColor(INK_PRIMARY).text("Analysis & Insights", PAGE_MARGIN, y);
+function drawAnalysis(
+  doc: PDFKit.PDFDocument,
+  analysisText: string,
+  y: number,
+  maxY: number,
+  strings: ReportStrings
+): number {
+  doc.font(FONT_BOLD).fontSize(11).fillColor(INK_PRIMARY).text(strings.analysisHeading, PAGE_MARGIN, y);
   y += 16;
 
   const truncated =
@@ -134,26 +168,26 @@ function drawAnalysis(doc: PDFKit.PDFDocument, analysisText: string, y: number, 
   return maxY;
 }
 
-function drawFooter(doc: PDFKit.PDFDocument): void {
+function drawFooter(doc: PDFKit.PDFDocument, strings: ReportStrings): void {
   doc
     .font(FONT_REGULAR)
     .fontSize(7.5)
     .fillColor(INK_MUTED)
-    .text(
-      "Data: Wikimedia Pageviews API & Wikidata. Pageviews are a proxy for public curiosity, not purchase intent -- use alongside other market signals.",
-      PAGE_MARGIN,
-      FOOTER_Y,
-      { width: CONTENT_WIDTH, height: PAGE_HEIGHT - PAGE_MARGIN - FOOTER_Y, ellipsis: true }
-    );
+    .text(strings.footerDisclaimer, PAGE_MARGIN, FOOTER_Y, {
+      width: CONTENT_WIDTH,
+      height: PAGE_HEIGHT - PAGE_MARGIN - FOOTER_Y,
+      ellipsis: true,
+    });
 }
 
 export async function generatePdfReport(input: GeneratePdfInput): Promise<string> {
   const { dataset, chartBuffer, analysisText } = input;
-  const title = input.title ?? "Wikipedia Market Interest Report";
+  const strings = reportStringsFor(input.reportLanguage);
+  const title = input.title ?? strings.defaultTitle;
 
-  fs.mkdirSync(config.outputDir, { recursive: true });
-  const fileName = `wikipedia-trends-${dataset.datasetId}.pdf`;
-  const filePath = path.join(config.outputDir, fileName);
+  const defaultFileName = `wikipedia-trends-${dataset.datasetId}.pdf`;
+  const filePath = resolveSaveTarget(input.saveTo, config.outputDir, defaultFileName);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
 
   const doc = new PDFDocument({ size: "A4", margin: PAGE_MARGIN, autoFirstPage: true, bufferPages: true });
   doc.registerFont(FONT_REGULAR, config.fontRegularPath);
@@ -162,11 +196,11 @@ export async function generatePdfReport(input: GeneratePdfInput): Promise<string
   const writeStream = fs.createWriteStream(filePath);
   doc.pipe(writeStream);
 
-  let y = drawHeader(doc, title, dataset);
+  let y = drawHeader(doc, title, dataset, strings);
   y = drawChart(doc, chartBuffer, y);
-  y = drawMetricsTable(doc, dataset, y);
-  drawAnalysis(doc, analysisText, y, ANALYSIS_MAX_Y);
-  drawFooter(doc);
+  y = drawMetricsTable(doc, dataset, y, strings);
+  drawAnalysis(doc, analysisText, y, ANALYSIS_MAX_Y, strings);
+  drawFooter(doc, strings);
 
   doc.end();
 
