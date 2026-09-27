@@ -28,7 +28,6 @@ export interface ReportStrings {
   };
   analysisHeading: string;
   chartTitle: string;
-  footerDisclaimer: string;
 }
 
 const EN: ReportStrings = {
@@ -48,8 +47,6 @@ const EN: ReportStrings = {
   },
   analysisHeading: "Analysis & Insights",
   chartTitle: "Weekly-average Wikipedia pageviews by language",
-  footerDisclaimer:
-    "Data: Wikimedia Pageviews API & Wikidata. Pageviews are a proxy for public curiosity, not purchase intent -- use alongside other market signals.",
 };
 
 const UK: ReportStrings = {
@@ -69,8 +66,6 @@ const UK: ReportStrings = {
   },
   analysisHeading: "Аналіз і висновки",
   chartTitle: "Перегляди Wikipedia по тижнях, за мовами",
-  footerDisclaimer:
-    "Дані: Wikimedia Pageviews API та Wikidata. Перегляди статей відображають цікавість/обізнаність, а не намір купувати -- враховуйте це поряд з іншими ринковими сигналами.",
 };
 
 const CATALOG: Record<string, ReportStrings> = { en: EN, uk: UK };

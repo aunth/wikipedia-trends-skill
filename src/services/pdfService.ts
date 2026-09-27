@@ -22,10 +22,9 @@ const PAGE_MARGIN = 40;
 const PAGE_WIDTH = 595.28; // A4 points
 const PAGE_HEIGHT = 841.89; // A4 points
 const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
-// PDFKit auto-adds a page if content is placed past the bottom margin -- these
-// two Y bounds keep everything strictly within the single printable page.
-const FOOTER_Y = PAGE_HEIGHT - PAGE_MARGIN - 24;
-const ANALYSIS_MAX_Y = FOOTER_Y - 14;
+// PDFKit auto-adds a page if content is placed past the bottom margin -- this
+// bound keeps everything strictly within the single printable page.
+const ANALYSIS_MAX_Y = PAGE_HEIGHT - PAGE_MARGIN;
 
 // PDFKit's built-in "Helvetica" is a PDF core font restricted to Latin-1 --
 // article titles arrive in whatever script the language uses (Cyrillic, Greek,
@@ -168,18 +167,6 @@ function drawAnalysis(
   return maxY;
 }
 
-function drawFooter(doc: PDFKit.PDFDocument, strings: ReportStrings): void {
-  doc
-    .font(FONT_REGULAR)
-    .fontSize(7.5)
-    .fillColor(INK_MUTED)
-    .text(strings.footerDisclaimer, PAGE_MARGIN, FOOTER_Y, {
-      width: CONTENT_WIDTH,
-      height: PAGE_HEIGHT - PAGE_MARGIN - FOOTER_Y,
-      ellipsis: true,
-    });
-}
-
 export async function generatePdfReport(input: GeneratePdfInput): Promise<string> {
   const { dataset, chartBuffer, analysisText } = input;
   const strings = reportStringsFor(input.reportLanguage);
@@ -200,7 +187,6 @@ export async function generatePdfReport(input: GeneratePdfInput): Promise<string
   y = drawChart(doc, chartBuffer, y);
   y = drawMetricsTable(doc, dataset, y, strings);
   drawAnalysis(doc, analysisText, y, ANALYSIS_MAX_Y, strings);
-  drawFooter(doc, strings);
 
   doc.end();
 

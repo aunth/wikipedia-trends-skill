@@ -9,11 +9,15 @@ import { StoredDataset } from "../types";
  * problems and have different lifecycles:
  *
  * 1. HTTP response cache (`httpCache`) -- prevents redundant network calls to
- *    Wikidata/Wikimedia when an agent loop re-resolves the same topic or
- *    re-analyzes the same articles across several turns. In-memory + TTL is
- *    enough here (per the task's "in-memory or SQLite" allowance): the data is
- *    small, cheap to refetch on process restart, and a TTL protects against ever
- *    serving genuinely stale "today" pageview counts (which do get revised).
+ *    Wikidata/Wikimedia when the same topic/article is re-resolved or
+ *    re-analyzed across several turns. This MUST be disk-backed, not purely
+ *    in-memory: the CLI (`dist/cli.js`), which is this skill's primary
+ *    integration path (see SKILL.md), invokes a fresh `node` process per tool
+ *    call -- an in-memory-only cache would be created and discarded on every
+ *    single call and would never actually deduplicate anything there. A small
+ *    in-memory layer is kept on top purely to avoid re-reading the same file
+ *    twice within one process (e.g. the native tool-calling harnesses, which
+ *    do stay alive for a whole conversation).
  *
  * 2. Dataset store (`datasetStore`) -- holds the FULL daily time series behind
  *    the opaque `dataset_id` handed to the LLM. This must survive being read
@@ -27,7 +31,7 @@ function ensureDir(dir: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// 1. In-memory HTTP cache with TTL
+// 1. Disk-backed HTTP cache with TTL (+ in-memory layer for same-process hits)
 // ---------------------------------------------------------------------------
 
 interface CacheEntry<T> {
@@ -42,14 +46,42 @@ export function cacheKeyFor(url: string, params?: Record<string, unknown>): stri
   return crypto.createHash("sha1").update(url + paramString).digest("hex");
 }
 
+function httpCachePath(key: string): string {
+  return path.join(config.cacheDir, `${key}.json`);
+}
+
+function readDiskCache<T>(key: string): CacheEntry<T> | null {
+  try {
+    const raw = fs.readFileSync(httpCachePath(key), "utf-8");
+    return JSON.parse(raw) as CacheEntry<T>;
+  } catch {
+    return null; // missing/corrupt cache file is just a cache miss, never a hard error
+  }
+}
+
+function writeDiskCache<T>(key: string, entry: CacheEntry<T>): void {
+  ensureDir(config.cacheDir);
+  fs.writeFileSync(httpCachePath(key), JSON.stringify(entry), "utf-8");
+}
+
 export async function withHttpCache<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-  const cached = httpCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.value as T;
+  const now = Date.now();
+
+  const inMemory = httpCache.get(key);
+  if (inMemory && inMemory.expiresAt > now) {
+    return inMemory.value as T;
+  }
+
+  const onDisk = readDiskCache<T>(key);
+  if (onDisk && onDisk.expiresAt > now) {
+    httpCache.set(key, onDisk);
+    return onDisk.value;
   }
 
   const value = await fetcher();
-  httpCache.set(key, { value, expiresAt: Date.now() + config.httpCacheTtlMs });
+  const entry: CacheEntry<T> = { value, expiresAt: now + config.httpCacheTtlMs };
+  httpCache.set(key, entry);
+  writeDiskCache(key, entry);
   return value;
 }
 
