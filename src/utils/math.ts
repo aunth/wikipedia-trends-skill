@@ -85,6 +85,52 @@ export function trendPercentage(series: DailyPageview[]): number {
   return Math.round(((secondAvg - firstAvg) / firstAvg) * 1000) / 10; // one decimal place
 }
 
+// Percentage-point gap between the raw and anomaly-excluded trend above which
+// the raw figure is considered "substantially" driven by short-term spikes
+// rather than a sustained shift -- see `checkTrendSkew`.
+const TREND_SKEW_WARNING_THRESHOLD_POINTS = 15;
+
+/**
+ * Same trend calculation as `trendPercentage`, but with the given dates
+ * excluded first -- lets a caller ask "what would the trend be without its
+ * spike days?" without duplicating the halves/average logic.
+ */
+export function trendPercentageExcludingDates(series: DailyPageview[], excludeDates: string[]): number {
+  if (excludeDates.length === 0) return trendPercentage(series);
+  const excluded = new Set(excludeDates);
+  return trendPercentage(series.filter((d) => !excluded.has(d.date)));
+}
+
+export interface TrendSkewCheck {
+  robustTrendPercentage: number;
+  skewedByAnomalies: boolean;
+}
+
+/**
+ * `trendPercentage` is a plain mean-of-halves comparison -- it has no
+ * built-in protection against a single viral day inflating (or deflating) the
+ * whole reported trend, even though `detectAnomalies` runs independently and
+ * already knows which days those are. This ties the two together: recompute
+ * the trend with the known anomalous days excluded, and flag it when that
+ * materially changes the story, so the caller doesn't present a spike-driven
+ * number as if it were a clean, sustained shift in interest.
+ */
+export function checkTrendSkew(
+  series: DailyPageview[],
+  anomalyDates: string[],
+  rawTrendPercentage: number
+): TrendSkewCheck {
+  if (anomalyDates.length === 0) {
+    return { robustTrendPercentage: rawTrendPercentage, skewedByAnomalies: false };
+  }
+
+  const robustTrendPercentage = trendPercentageExcludingDates(series, anomalyDates);
+  const skewedByAnomalies =
+    Math.abs(rawTrendPercentage - robustTrendPercentage) >= TREND_SKEW_WARNING_THRESHOLD_POINTS;
+
+  return { robustTrendPercentage, skewedByAnomalies };
+}
+
 export interface AnomalyDetectionResult {
   hasAnomalies: boolean;
   anomalyDates: string[];

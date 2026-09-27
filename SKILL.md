@@ -63,8 +63,15 @@ Run:
 node dist/cli.js resolve_topic_languages '{"topic":"<topic as the user described it>","source_language":"<language the topic is written in, e.g. \"en\">","target_languages":["<Wikipedia language codes to compare, e.g. \"uk\", \"pl\">"]}'
 ```
 
-Output: `{ ok, wikidata_id, resolved: [{lang, title}], missing_languages: [...], message }`.
+Output: `{ ok, wikidata_id, matched_label, matched_description, resolved: [{lang, title}], missing_languages: [...], message }`.
 
+- **Check `matched_description` against what the user meant before trusting the rest of the output.**
+  Wikidata's search returns its single top-ranked hit for the topic string, which is not always the
+  sense the user intended for an ambiguous term (e.g. "Mercury" -> the planet, the chemical element, and
+  the Roman god are all separate Wikidata entities; the top hit could be any of them). If
+  `matched_description` doesn't match the topic as the user described it, tell them exactly what was
+  matched (`matched_label` + `matched_description`) and ask them to rephrase more specifically -- do not
+  proceed to analyze the wrong real-world entity just because *something* resolved.
 - If `resolved` is empty, immediately retry once yourself with an alternate
   phrasing of the same topic (a common synonym, singular/plural, or a more
   standard term -- e.g. "Electric bikes" -> "Electric bicycle") before saying
@@ -97,6 +104,12 @@ Output: `{ dataset_id, period_start, period_end, languages: [{lang, title, found
   positive means growing interest, negative means declining. Interpret
   `has_anomalies` / `anomaly_dates` as one-off spikes (news events, viral
   moments) worth calling out as caveats, not as sustained trend.
+- `warnings` may include a note that a language's `trend_percentage` is
+  itself substantially driven by one or more of its own `anomaly_dates` (a
+  viral day inflating/deflating the whole-period average) rather than a
+  genuine sustained shift. When present, relay this explicitly as a caveat
+  instead of presenting the raw trend as a clean, sustained change in
+  interest.
 - Do not ask for or expect raw daily numbers -- the `dataset_id` this returns
   is an opaque handle for the next step, not something to inspect or explain.
 

@@ -66,6 +66,17 @@ export const ResolvedLanguageSchema = z.object({
 export const ResolveTopicLanguagesOutputSchema = z.object({
   ok: z.boolean().describe("False only if the topic itself could not be found at all."),
   wikidata_id: z.string().nullable().describe("The resolved Wikidata QID, or null if not found."),
+  matched_label: z
+    .string()
+    .optional()
+    .describe("The label of the Wikidata entity that was actually matched -- compare against the user's intent."),
+  matched_description: z
+    .string()
+    .optional()
+    .describe(
+      "Wikidata's short description of the matched entity, e.g. 'planet of the Solar System' -- use this to " +
+        "catch an ambiguous topic (e.g. 'Mercury') resolving to the wrong sense before trusting the data."
+    ),
   resolved: z
     .array(ResolvedLanguageSchema)
     .describe("Language -> exact article title, for every target language that has an article."),

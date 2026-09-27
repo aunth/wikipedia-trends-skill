@@ -7,6 +7,7 @@ import {
   monthlyAverageViews,
   trendPercentage,
   detectAnomalies,
+  checkTrendSkew,
 } from "../utils/math";
 import {
   AnalyzeWikipediaTrendsInput,
@@ -33,32 +34,54 @@ import {
 // days at the tail of the range.
 const PAGEVIEWS_API_LAG_DAYS = 3;
 
-function computeMetrics(article: ArticleTimeSeries, found: boolean): LanguageTrendMetrics {
+interface ComputedMetrics {
+  metrics: LanguageTrendMetrics;
+  warning?: string;
+}
+
+function computeMetrics(article: ArticleTimeSeries, found: boolean): ComputedMetrics {
   if (!found || article.series.length === 0) {
     return {
-      lang: article.lang,
-      title: article.title,
-      found: false,
-      total_views: 0,
-      monthly_average_views: 0,
-      trend_percentage: 0,
-      has_anomalies: false,
-      anomaly_dates: [],
+      metrics: {
+        lang: article.lang,
+        title: article.title,
+        found: false,
+        total_views: 0,
+        monthly_average_views: 0,
+        trend_percentage: 0,
+        has_anomalies: false,
+        anomaly_dates: [],
+      },
     };
   }
 
   const anomalies = detectAnomalies(article.series);
+  const trend = trendPercentage(article.series);
+  const skew = checkTrendSkew(article.series, anomalies.anomalyDates, trend);
 
-  return {
+  const metrics: LanguageTrendMetrics = {
     lang: article.lang,
     title: article.title,
     found: true,
     total_views: totalViews(article.series),
     monthly_average_views: monthlyAverageViews(article.series),
-    trend_percentage: trendPercentage(article.series),
+    trend_percentage: trend,
     has_anomalies: anomalies.hasAnomalies,
     anomaly_dates: anomalies.anomalyDates,
   };
+
+  // Ties trend and anomalies together explicitly: without this, a headline
+  // trend_percentage driven mostly by one viral day would look identical to a
+  // genuinely sustained shift, with nothing but the LLM's own judgment
+  // standing between the two.
+  const warning = skew.skewedByAnomalies
+    ? `Trend for ${article.lang} ("${article.title}") is reported as ${trend}%, but excluding its ` +
+      `${anomalies.anomalyDates.length} anomalous spike day(s) it would be ${skew.robustTrendPercentage}% -- ` +
+      `the raw trend may be substantially driven by short-term spikes rather than a sustained change in ` +
+      `interest. Mention this caveat rather than presenting the raw trend as a clean sustained shift.`
+    : undefined;
+
+  return { metrics, warning };
 }
 
 export async function analyzeWikipediaTrends(
@@ -78,7 +101,9 @@ export async function analyzeWikipediaTrends(
 
     const withSeries: ArticleTimeSeries = { ...result.article, series: result.series };
     articleSeries.push(withSeries);
-    metrics.push(computeMetrics(withSeries, result.found));
+    const computed = computeMetrics(withSeries, result.found);
+    metrics.push(computed.metrics);
+    if (computed.warning) warnings.push(computed.warning);
   }
 
   const foundCount = metrics.filter((m) => m.found).length;

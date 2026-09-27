@@ -63,7 +63,11 @@ export async function fetchDailyPageviews(
     config.pageviewsApiUrl,
     `${article.lang}.wikipedia.org`,
     "all-access",
-    "all-agents",
+    // "user" (not "all-agents") -- this is a "public curiosity" proxy, and
+    // bot/spider/automated crawl traffic is noise that pollutes it: a bot
+    // burst would otherwise look exactly like a genuine human interest spike
+    // and get flagged as an anomaly for the wrong reason.
+    "user",
     encodedTitle,
     "daily",
     toWikimediaDate(start),

@@ -8,6 +8,8 @@ import {
   totalViews,
   monthlyAverageViews,
   trendPercentage,
+  trendPercentageExcludingDates,
+  checkTrendSkew,
   detectAnomalies,
 } from "./math";
 import { DailyPageview } from "../types";
@@ -85,6 +87,43 @@ describe("trendPercentage", () => {
 
   test("zero baseline with nonzero follow-up returns 100, not Infinity", () => {
     assert.equal(trendPercentage(series([0, 0, 50, 50])), 100);
+  });
+});
+
+describe("trendPercentageExcludingDates / checkTrendSkew", () => {
+  test("excluding no dates is identical to the plain trend", () => {
+    const s = series([100, 100, 200, 200]);
+    assert.equal(trendPercentageExcludingDates(s, []), trendPercentage(s));
+  });
+
+  test("a single viral day in the second half is excluded from the robust trend", () => {
+    // First half: 10 flat days at 100. Second half: 9 more flat days at 100,
+    // plus one viral day at 5000 -- the raw trend is dominated by that one day.
+    const values = [...new Array(10).fill(100), ...new Array(9).fill(100), 5000];
+    const s = series(values);
+    const spikeDate = s[19]!.date;
+
+    const robust = trendPercentageExcludingDates(s, [spikeDate]);
+    assert.equal(robust, 0); // with the spike removed, both halves are flat at 100
+  });
+
+  test("flags a trend as skewed when removing its anomaly dates changes it substantially", () => {
+    const values = [...new Array(10).fill(100), ...new Array(9).fill(100), 5000];
+    const s = series(values);
+    const spikeDate = s[19]!.date;
+    const rawTrend = trendPercentage(s);
+
+    const check = checkTrendSkew(s, [spikeDate], rawTrend);
+    assert.equal(check.skewedByAnomalies, true);
+    assert.equal(check.robustTrendPercentage, 0);
+  });
+
+  test("does not flag skew when there are no anomaly dates to exclude", () => {
+    const s = series([100, 120, 140, 160]);
+    const rawTrend = trendPercentage(s);
+    const check = checkTrendSkew(s, [], rawTrend);
+    assert.equal(check.skewedByAnomalies, false);
+    assert.equal(check.robustTrendPercentage, rawTrend);
   });
 });
 

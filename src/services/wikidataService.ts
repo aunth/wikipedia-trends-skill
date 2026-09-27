@@ -34,7 +34,23 @@ function siteKeyFor(lang: string): string {
   return `${lang}wiki`;
 }
 
-async function searchEntityId(topic: string, sourceLang: string): Promise<string | null> {
+interface EntityMatch {
+  id: string;
+  label?: string;
+  description?: string;
+}
+
+/**
+ * Takes Wikidata's top search hit blindly -- `wbsearchentities` ranks by its
+ * own relevance heuristic, not by the caller's intent. For an unambiguous
+ * topic this is fine, but for an ambiguous one ("Mercury": the planet? the
+ * element? the Roman god? a car brand?) the top hit may not be what the user
+ * meant, with nothing to catch it. Returning `label`/`description` alongside
+ * the id lets the caller (the LLM, via resolveTopicLanguages' `message`) see
+ * exactly what was matched and re-search with a disambiguating phrase if it
+ * looks wrong, instead of silently analyzing the wrong real-world entity.
+ */
+async function searchEntity(topic: string, sourceLang: string): Promise<EntityMatch | null> {
   const params = {
     action: "wbsearchentities",
     search: topic,
@@ -49,7 +65,8 @@ async function searchEntityId(topic: string, sourceLang: string): Promise<string
   );
 
   const firstResult = data.search?.[0];
-  return firstResult?.id ?? null;
+  if (!firstResult) return null;
+  return { id: firstResult.id, label: firstResult.label, description: firstResult.description };
 }
 
 async function getSitelinks(qid: string, targetLangs: string[]): Promise<Record<string, string>> {
@@ -83,9 +100,9 @@ export async function resolveTopicLanguages(
 ): Promise<ResolveTopicLanguagesOutput> {
   const { topic, source_language, target_languages } = input;
 
-  let qid: string | null;
+  let match: EntityMatch | null;
   try {
-    qid = await searchEntityId(topic, source_language);
+    match = await searchEntity(topic, source_language);
   } catch (error) {
     return {
       ok: false,
@@ -98,7 +115,7 @@ export async function resolveTopicLanguages(
     };
   }
 
-  if (!qid) {
+  if (!match) {
     return {
       ok: false,
       wikidata_id: null,
@@ -107,6 +124,9 @@ export async function resolveTopicLanguages(
       message: `No Wikidata entity found for "${topic}" in language "${source_language}". Tell the user this exact topic could not be found and suggest they try a more specific or differently-worded topic.`,
     };
   }
+
+  const qid = match.id;
+  const matchedAs = match.label ? `"${match.label}"${match.description ? ` (${match.description})` : ""}` : qid;
 
   let sitelinkMap: Record<string, string>;
   try {
@@ -128,19 +148,27 @@ export async function resolveTopicLanguages(
     .map((lang) => ({ lang, title: sitelinkMap[lang] as string }));
   const missingLanguages = target_languages.filter((lang) => !sitelinkMap[lang]);
 
+  // Always surfaced, regardless of how many languages resolved -- this is the
+  // disambiguation check: the caller should confirm the matched entity is
+  // actually the real-world thing the user meant before trusting the data.
+  const disambiguationNote =
+    `Matched "${topic}" to Wikidata entity ${matchedAs} (${qid}). If this is not the concept the user meant ` +
+    `(e.g. an ambiguous term resolved to the wrong sense), tell them what was matched and ask them to ` +
+    `rephrase more specifically -- do not silently proceed with a mismatched topic.`;
+
   let message: string;
   if (resolved.length === 0) {
-    message = `Found "${topic}" on Wikidata (${qid}), but none of the requested languages (${target_languages.join(
+    message = `${disambiguationNote} None of the requested languages (${target_languages.join(
       ", "
     )}) have an article for it. Inform the user no comparison is possible for these languages.`;
   } else if (missingLanguages.length > 0) {
-    message = `Resolved "${topic}" (${qid}) for ${resolved
+    message = `${disambiguationNote} Resolved for ${resolved
       .map((r) => r.lang)
       .join(", ")}. No article exists for: ${missingLanguages.join(
       ", "
     )} -- inform the user these languages will be skipped and proceed with the remaining languages.`;
   } else {
-    message = `Resolved "${topic}" (${qid}) for all requested languages: ${resolved
+    message = `${disambiguationNote} Resolved for all requested languages: ${resolved
       .map((r) => r.lang)
       .join(", ")}.`;
   }
@@ -148,6 +176,8 @@ export async function resolveTopicLanguages(
   return {
     ok: true,
     wikidata_id: qid,
+    matched_label: match.label,
+    matched_description: match.description,
     resolved,
     missing_languages: missingLanguages,
     message,
